@@ -1,3 +1,4 @@
+
 export interface SentencePair {
   text: string;
   trans: string;
@@ -26,8 +27,10 @@ export interface AppSettings {
   // Keys
   geminiKey: string;
   deepseekKey: string;
-  doubaoKey: string;
+  doubaoKey: string; // This is the Access Token
+  doubaoAppId: string; // Required for V1 API
   
   // Config
   doubaoVoice: string;
+  proxyUrl: string; // CORS Proxy URL
 }

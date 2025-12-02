@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality } from "@google/genai";
 import { pcmToWav, decodeBase64, mergeBuffers, createWavBlob } from '../utils/audioUtils';
 import { getSettings } from '../utils/storage';
@@ -14,6 +15,14 @@ const getGeminiClient = (key?: string) => {
      // We return a client that will likely fail on calls, but we don't crash the app initialization
   }
   return new GoogleGenAI({ apiKey: finalKey || 'DUMMY_KEY_FOR_INIT' });
+};
+
+const uuidv4 = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 };
 
 // --- LLM Services ---
@@ -171,47 +180,51 @@ const callGeminiTTS = async (text: string, apiKey: string): Promise<Uint8Array> 
   return decodeBase64(audioContent);
 };
 
-const callDoubaoTTS = async (text: string, apiKey: string, voice: string): Promise<Uint8Array> => {
-  if (!apiKey) throw new Error("请在设置中配置豆包 API Key");
+// V1 HTTP API Implementation for Doubao with Proxy Support
+const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice: string, proxyUrl?: string): Promise<Uint8Array> => {
+  if (!apiKey || !appId) throw new Error("请在设置中配置豆包 AppID 和 Access Token");
   
-  const url = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
-  
-  // Standard Resource ID for BigTTS as per documentation
-  const resourceId = 'volc.service_type.10029'; 
+  const targetUrl = 'https://openspeech.bytedance.com/api/v1/tts';
+  const reqId = uuidv4();
 
-  // Config params for Doubao engine optimization
-  const additionsObj = {
-    disable_markdown_filter: true,
-    enable_language_detector: true,
-    enable_latex_tn: true,
-    disable_default_bit_rate: true,
-    max_length_to_filter_parenthesis: 0,
-    cache_config: { text_type: 1, use_cache: true }
-  };
-
+  // V1 API Payload Structure
   const payload = {
-    user: {
-      uid: "postgrad_user"
+    app: {
+      appid: appId,
+      token: "access_token", // "Fake token" as per docs, real auth is in header
+      cluster: "volcano_tts"
     },
-    req_params: {
+    user: {
+      uid: "user_1" // Can be any string
+    },
+    audio: {
+      voice_type: voice,
+      encoding: "pcm", // Preferred for decoding
+      speed_ratio: 1.0,
+      rate: 24000
+    },
+    request: {
+      reqid: reqId,
       text: text,
-      speaker: voice, 
-      additions: JSON.stringify(additionsObj), 
-      audio_params: {
-        format: 'pcm', 
-        sample_rate: 24000
-      }
+      operation: "query" // 'query' for non-streaming HTTP
     }
   };
 
+  // Construct URL with Proxy if configured
+  let finalUrl = targetUrl;
+  if (proxyUrl && proxyUrl.trim()) {
+      // Logic for the provided Cloudflare worker (expects ?apiurl=...)
+      const separator = proxyUrl.includes('?') ? '&' : '?';
+      finalUrl = `${proxyUrl}${separator}apiurl=${encodeURIComponent(targetUrl)}`;
+  }
+
   try {
-    const response = await fetch(url, {
+    const response = await fetch(finalUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Note the semicolon: 'Bearer; token' is often required by ByteDance APIs
-        'Authorization': `Bearer; ${apiKey}`,
-        'X-Api-Resource-Id': resourceId
+        // Crucial: Bearer and token separated by semicolon
+        'Authorization': `Bearer;${apiKey}`
       },
       body: JSON.stringify(payload)
     });
@@ -221,21 +234,28 @@ const callDoubaoTTS = async (text: string, apiKey: string, voice: string): Promi
       try {
         const errJson = await response.json();
         if (errJson.message) errMsg += ` - ${errJson.message}`;
-        if (errJson.code) errMsg += ` (Code: ${errJson.code})`;
       } catch(e) {
-         // ignore JSON parse error
-         const textBody = await response.text();
-         if(textBody) errMsg += ` - ${textBody.substring(0, 100)}`;
+         // ignore
       }
       throw new Error(errMsg);
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    return new Uint8Array(arrayBuffer);
+    const data = await response.json();
+    
+    // V1 API response validation
+    if (data.code !== 3000) {
+      throw new Error(`Doubao API Error (${data.code}): ${data.message || 'Unknown Error'}`);
+    }
+
+    if (!data.data) {
+      throw new Error("No audio data received from Doubao API");
+    }
+
+    return decodeBase64(data.data);
+
   } catch (e: any) {
-    // Check for potential CORS/Network errors which often appear as "Failed to fetch"
-    if (e.message === 'Failed to fetch') {
-       throw new Error("网络请求失败 (CORS)。请检查 API Key 是否正确，或尝试更换网络环境。如果问题持续，可能是浏览器跨域限制导致的。");
+    if (e.message.includes('Failed to fetch')) {
+       throw new Error("网络请求失败 (CORS)。请检查代理设置 (Proxy URL) 是否配置正确。");
     }
     throw e;
   }
@@ -248,7 +268,13 @@ export const fetchRawAudio = async (text: string): Promise<Uint8Array> => {
   if (settings.ttsProvider === 'gemini') {
     return await callGeminiTTS(text, settings.geminiKey);
   } else if (settings.ttsProvider === 'doubao') {
-    return await callDoubaoTTS(text, settings.doubaoKey, settings.doubaoVoice);
+    return await callDoubaoTTS(
+      text, 
+      settings.doubaoKey, 
+      settings.doubaoAppId, 
+      settings.doubaoVoice,
+      settings.proxyUrl
+    );
   } else {
     throw new Error("Browser TTS does not support raw audio fetching. Use Cloud TTS (Gemini/Doubao).");
   }

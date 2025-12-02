@@ -9,7 +9,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   geminiKey: '', // Will fallback to process.env in service if empty
   deepseekKey: '',
   doubaoKey: '',
+  doubaoAppId: '',
   doubaoVoice: 'BV001_streaming', // Default Doubao voice
+  proxyUrl: '',
 };
 
 export const getSettings = (): AppSettings => {

@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { X, Save, Key, Server, Mic, Cpu } from 'lucide-react';
+import { X, Save, Key, Server, Mic, Cpu, Globe } from 'lucide-react';
 import { AppSettings } from '../types';
 import { getSettings, saveSettings } from '../utils/storage';
 
@@ -128,15 +129,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                 />
               </div>
 
+              {/* Proxy Settings */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-2">
+                    <Globe className="w-3 h-3"/> CORS Proxy URL (Required for Doubao/Web)
+                </label>
+                <input 
+                  type="text" 
+                  value={settings.proxyUrl}
+                  onChange={(e) => setSettings({...settings, proxyUrl: e.target.value})}
+                  placeholder="https://your-worker.workers.dev/corsproxy/"
+                  className="w-full text-sm p-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                   豆包 API 不支持浏览器直接调用 (CORS)。请部署 Cloudflare Worker 并在此填入地址。
+                </p>
+              </div>
+
               {/* Doubao Config */}
               <div className={settings.ttsProvider === 'doubao' ? 'space-y-3 pt-3 border-t border-slate-200' : 'hidden'}>
                  <div>
-                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao API Key (x-api-key)</label>
+                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao AppID</label>
+                    <input 
+                      type="text" 
+                      value={settings.doubaoAppId || ''}
+                      onChange={(e) => setSettings({...settings, doubaoAppId: e.target.value})}
+                      placeholder="e.g. 123456789"
+                      className="w-full text-sm p-2 border border-emerald-200 rounded focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
+                    />
+                 </div>
+                 <div>
+                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao Access Token</label>
                     <input 
                       type="password" 
                       value={settings.doubaoKey}
                       onChange={(e) => setSettings({...settings, doubaoKey: e.target.value})}
-                      placeholder="e.g. fdb3b0e2-..."
+                      placeholder="Your Access Token"
                       className="w-full text-sm p-2 border border-emerald-200 rounded focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
                     />
                  </div>
