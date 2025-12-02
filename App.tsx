@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Pause, RotateCcw, Volume2, BookOpen, Eye, EyeOff, 
@@ -137,14 +138,21 @@ export default function App() {
   };
 
   const handleAudioEnded = () => {
-    scheduleNext(currentIndex);
+    // If triggered by click (playText), we might want to just stop
+    // If triggered by auto-play queue, schedule next
+    // For simplicity, we assume auto-advance logic if playing state is true
+    // But if we clicked a specific paragraph, we might want to just play that one.
+    // Let's stick to existing logic: if Playing, go next.
+    if (isPlaying) {
+         scheduleNext(currentIndex);
+    }
   };
 
   const handleAudioError = (e: any) => {
     console.error("Audio Playback Error", e);
     setIsPlaying(false);
     setLoadingAudioIndex(null);
-    alert("播放出错，请检查网络或 TTS 设置。如果使用的是 Cloud TTS，请确认 API Key 正确。");
+    // Don't alert too aggressively on rapid clicks
   };
 
   const scheduleNext = (completedIndex: number) => {
@@ -168,34 +176,30 @@ export default function App() {
       }
   };
 
-  // --- Speech Logic ---
+  // --- Core Speech Logic (Modified for Click-to-Play) ---
   const speakSentence = async (index: number) => {
     if (index >= pairs.length || index < 0) { setIsPlaying(false); return; }
     
-    // Stop any current playback
-    if (synth.current) synth.current.cancel();
-    if (audioRef.current) audioRef.current.pause();
-    if (timerRef.current) clearTimeout(timerRef.current);
-
     const sentence = pairs[index].text;
 
-    // --- Strategy 1: Cloud TTS (Gemini) ---
+    // --- Strategy 1: Cloud TTS (Gemini/Doubao) ---
     if (settings.ttsProvider !== 'browser') {
         try {
             setLoadingAudioIndex(index);
             let url = audioCache.current.get(sentence);
             
             if (!url) {
-                // Fetch new
                 url = await generateSpeechUrl(sentence);
                 audioCache.current.set(sentence, url);
             }
 
-            if (audioRef.current && isPlaying) {
+            if (audioRef.current) {
                 audioRef.current.src = url;
                 audioRef.current.playbackRate = rate; 
                 await audioRef.current.play();
                 setLoadingAudioIndex(null);
+                // Ensure state reflects playing
+                setIsPlaying(true);
             }
         } catch (e: any) {
             console.error("Cloud TTS Error", e);
@@ -207,14 +211,19 @@ export default function App() {
     }
 
     // --- Strategy 2: Browser TTS ---
+    if (synth.current) synth.current.cancel(); // Stop previous
+    
     const utterance = new SpeechSynthesisUtterance(sentence);
     utterance.rate = rate;
     if (selectedVoice) utterance.voice = selectedVoice;
     
-    utterance.onstart = () => { uttr.current = utterance; };
+    utterance.onstart = () => { 
+        uttr.current = utterance; 
+        setIsPlaying(true);
+    };
     utterance.onend = () => {
       uttr.current = null;
-      scheduleNext(index);
+      handleAudioEnded();
     };
     utterance.onerror = (e) => { 
         if (e.error !== 'interrupted') setIsPlaying(false); 
@@ -224,6 +233,22 @@ export default function App() {
         uttr.current = utterance; 
         if (synth.current) synth.current.speak(utterance); 
     }, 50);
+  };
+
+  // --- Click to Play Handler ---
+  const handleParagraphClick = (index: number) => {
+      // 1. Exclusive: Stop any current playback
+      stopPlayback();
+      
+      // 2. Update Index
+      setCurrentIndex(index);
+      
+      // 3. Play immediately (async)
+      // Small timeout to allow stopPlayback to clean up events
+      setTimeout(() => {
+          setIsPlaying(true);
+          speakSentence(index);
+      }, 50);
   };
 
   const handlePlay = () => {
@@ -281,7 +306,7 @@ export default function App() {
           const wavUrl = await generateSpeechUrl(sentence);
           const a = document.createElement('a');
           a.href = wavUrl;
-          a.download = `sentence_${index + 1}.wav`;
+          a.download = `sentence_${index + 1}.mp3`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
@@ -294,7 +319,7 @@ export default function App() {
 
   const handleDownloadFullAudio = async () => {
     if (settings.ttsProvider === 'browser') {
-        alert("浏览器语音不支持全文下载，请在设置中切换为 Cloud TTS (Gemini)。");
+        alert("浏览器语音不支持全文下载，请在设置中切换为 Cloud TTS (Gemini/Doubao)。");
         return;
     }
     
@@ -312,7 +337,7 @@ export default function App() {
 
         const a = document.createElement('a');
         a.href = wavUrl;
-        a.download = `${title || 'full_audio'}.wav`;
+        a.download = `${title || 'full_audio'}.mp3`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -520,8 +545,12 @@ export default function App() {
                             <div 
                                 key={index} 
                                 ref={index === currentIndex ? activeCardRef : null}
-                                onClick={() => { if(isPlaying) { stopPlayback(); setTimeout(()=>speakSentence(index), 50);} setCurrentIndex(index); }} 
-                                className={`relative p-6 rounded-2xl transition-all duration-300 border-2 cursor-pointer group ${index === currentIndex ? 'bg-white border-indigo-500 shadow-xl shadow-indigo-100 scale-[1.01]' : 'bg-white border-transparent hover:border-slate-200 shadow-sm hover:shadow-md'}`}
+                                onClick={() => handleParagraphClick(index)} // Click to play paragraph/sentence
+                                className={`relative p-6 rounded-2xl transition-all duration-300 border-2 cursor-pointer group 
+                                    ${index === currentIndex && isPlaying ? 'bg-[#fffec8] border-indigo-500 shadow-lg' : 
+                                      index === currentIndex ? 'bg-white border-indigo-500 shadow-xl shadow-indigo-100 scale-[1.01]' : 
+                                      'bg-white border-transparent hover:border-slate-200 shadow-sm hover:shadow-md'
+                                    }`}
                             >
                                 <div className="flex justify-between items-start mb-3">
                                     <span className={`text-xs font-bold px-2 py-1 rounded-md ${index === currentIndex ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-400'}`}>
@@ -534,6 +563,7 @@ export default function App() {
                                     </div>
                                 </div>
 
+                                {/* Text Content - Acts as Span within the paragraph block */}
                                 <div className={`text-xl md:text-2xl leading-relaxed font-serif transition-colors ${index === currentIndex ? 'text-slate-900' : 'text-slate-500'}`}>
                                     {hideText && index === currentIndex ? (
                                         <div className="flex items-center gap-3 text-slate-300 italic py-4 select-none bg-slate-50 rounded-lg justify-center border border-dashed border-slate-200">
@@ -601,6 +631,8 @@ export default function App() {
                   <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-medium text-slate-500 whitespace-nowrap">
                       {settings.ttsProvider === 'browser' ? (
                           <span className="flex items-center gap-1"><Globe className="w-3 h-3"/> Browser TTS</span>
+                      ) : settings.ttsProvider === 'doubao' ? (
+                          <span className="flex items-center gap-1 text-emerald-600"><Mic className="w-3 h-3"/> Doubao Cloud</span>
                       ) : (
                           <span className="flex items-center gap-1 text-pink-600"><Mic className="w-3 h-3"/> Gemini Cloud</span>
                       )}

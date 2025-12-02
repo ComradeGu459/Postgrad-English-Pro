@@ -180,51 +180,43 @@ const callGeminiTTS = async (text: string, apiKey: string): Promise<Uint8Array> 
   return decodeBase64(audioContent);
 };
 
-// V1 HTTP API Implementation for Doubao with Proxy Support
-const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice: string, proxyUrl?: string): Promise<Uint8Array> => {
+// V1 HTTP API Implementation for Doubao via Specific Worker
+const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice: string): Promise<Uint8Array> => {
   if (!apiKey || !appId) throw new Error("请在设置中配置豆包 AppID 和 Access Token");
   
-  const targetUrl = 'https://openspeech.bytedance.com/api/v1/tts';
+  // Specific Worker URL provided
+  const targetUrl = 'https://weathered-doubao.comradegu.workers.dev/api/v1/tts';
   const reqId = uuidv4();
 
-  // V1 API Payload Structure
+  // Strict JSON Body Structure
   const payload = {
     app: {
       appid: appId,
-      token: "access_token", // "Fake token" as per docs, real auth is in header
+      token: "access_token", // "Fake token" usually, real auth in header
       cluster: "volcano_tts"
     },
     user: {
-      uid: "user_1" // Can be any string
+      uid: "web_user"
     },
     audio: {
-      voice_type: voice,
-      encoding: "pcm", // Preferred for decoding
+      voice_type: voice || 'zh_male_guozhoudege_moon_bigtts',
+      encoding: "mp3", 
       speed_ratio: 1.0,
-      rate: 24000
     },
     request: {
-      reqid: reqId,
+      reqid: `uuid_${reqId}`,
       text: text,
-      operation: "query" // 'query' for non-streaming HTTP
+      operation: "query" 
     }
   };
 
-  // Construct URL with Proxy if configured
-  let finalUrl = targetUrl;
-  if (proxyUrl && proxyUrl.trim()) {
-      // Logic for the provided Cloudflare worker (expects ?apiurl=...)
-      const separator = proxyUrl.includes('?') ? '&' : '?';
-      finalUrl = `${proxyUrl}${separator}apiurl=${encodeURIComponent(targetUrl)}`;
-  }
-
   try {
-    const response = await fetch(finalUrl, {
+    const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         // Crucial: Bearer and token separated by semicolon
-        'Authorization': `Bearer;${apiKey}`
+        'Authorization': `Bearer; ${apiKey}` 
       },
       body: JSON.stringify(payload)
     });
@@ -234,9 +226,7 @@ const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice:
       try {
         const errJson = await response.json();
         if (errJson.message) errMsg += ` - ${errJson.message}`;
-      } catch(e) {
-         // ignore
-      }
+      } catch(e) { /* ignore */ }
       throw new Error(errMsg);
     }
 
@@ -255,7 +245,7 @@ const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice:
 
   } catch (e: any) {
     if (e.message.includes('Failed to fetch')) {
-       throw new Error("网络请求失败 (CORS)。请检查代理设置 (Proxy URL) 是否配置正确。");
+       throw new Error("网络请求失败。请检查 Token 是否正确或 Worker 是否可用。");
     }
     throw e;
   }
@@ -272,8 +262,7 @@ export const fetchRawAudio = async (text: string): Promise<Uint8Array> => {
       text, 
       settings.doubaoKey, 
       settings.doubaoAppId, 
-      settings.doubaoVoice,
-      settings.proxyUrl
+      settings.doubaoVoice
     );
   } else {
     throw new Error("Browser TTS does not support raw audio fetching. Use Cloud TTS (Gemini/Doubao).");
@@ -283,8 +272,21 @@ export const fetchRawAudio = async (text: string): Promise<Uint8Array> => {
 export const generateSpeechUrl = async (text: string): Promise<string> => {
   try {
     const rawBuffer = await fetchRawAudio(text);
-    const blob = createWavBlob(rawBuffer, 24000);
-    return URL.createObjectURL(blob);
+    // Note: If using mp3 from Doubao, we might want to return a blob with audio/mp3
+    // But createWavBlob wraps it in a wav container or we can just use the raw bytes if mp3
+    // For simplicity in this app structure, we convert to blob. 
+    // If the source is MP3, wrapping in WAV header is technically wrong but often works or we should just make a blob.
+    
+    // Let's create a generic audio blob to support MP3/WAV
+    const settings = getSettings();
+    if (settings.ttsProvider === 'doubao') {
+        // Doubao returns MP3 based on our config above.
+        const blob = new Blob([rawBuffer], { type: 'audio/mp3' });
+        return URL.createObjectURL(blob);
+    } else {
+        const blob = createWavBlob(rawBuffer, 24000);
+        return URL.createObjectURL(blob);
+    }
   } catch (error: any) {
     console.error("TTS Generation Error:", error);
     throw error;
@@ -303,9 +305,21 @@ export const generateFullTextAudio = async (texts: string[], onProgress?: (curre
       processed++;
     }
     
+    // Note: Simple concatenation of MP3 files works reasonably well in many players but isn't spec-perfect.
+    // For WAV (Gemini), mergeBuffers works perfectly.
     const merged = mergeBuffers(buffers);
-    const blob = createWavBlob(merged, 24000);
-    return URL.createObjectURL(blob);
+    const settings = getSettings();
+    const type = settings.ttsProvider === 'doubao' ? 'audio/mp3' : 'audio/wav';
+    
+    // If WAV, add header. If MP3, raw concat.
+    if (type === 'audio/wav') {
+         const blob = createWavBlob(merged, 24000);
+         return URL.createObjectURL(blob);
+    } else {
+         const blob = new Blob([merged], { type: 'audio/mp3' });
+         return URL.createObjectURL(blob);
+    }
+
   } catch (error) {
     console.error("Full Text Generation Error", error);
     throw error;
