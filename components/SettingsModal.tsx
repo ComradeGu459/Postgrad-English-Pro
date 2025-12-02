@@ -1,8 +1,9 @@
 
-import React, { useState } from 'react';
-import { X, Save, Key, Server, Mic, Cpu, Globe } from 'lucide-react';
-import { AppSettings } from '../types';
+import React, { useState, useEffect } from 'react';
+import { X, Save, Key, Server, Mic, Cpu, Globe, Trash2, Check, Database } from 'lucide-react';
+import { AppSettings, HistoryItem } from '../types';
 import { getSettings, saveSettings } from '../utils/storage';
+import { clearAllTTSCache, clearUnitCache } from '../services/aiService';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -10,22 +11,59 @@ interface SettingsModalProps {
 }
 
 const DOUBAO_VOICES = [
-  { id: 'BV001_streaming', name: '通用女声 (BV001)' },
-  { id: 'BV002_streaming', name: '通用男声 (BV002)' },
+  // --- 核心推荐 (BigTTS) ---
+  { id: 'zh_male_guozhoudege_moon_bigtts', name: '国周 (磁性解说/推荐)' },
   { id: 'zh_female_shuangkuaisisi_moon_bigtts', name: '爽快思思 (生动/推荐)' },
+  
+  // --- 情感/特色 ---
   { id: 'zh_male_beijingxiaoye_emo_v2_mars_bigtts', name: '北京小爷 (情感版)' },
-  { id: 'zh_female_cancan_mars_bigtts', name: '灿灿 (解说)' },
+  { id: 'zh_male_chunhouxiaoyu_moon_bigtts', name: '醇厚小宇 (有声书)' },
   { id: 'zh_female_zhichuxin_moon_bigtts', name: '知性楚欣 (新闻/正式)' },
-  { id: 'zh_male_chunhouxiaoyu_moon_bigtts', name: '醇厚小宇 (有声书)' }
+  { id: 'zh_female_cancan_mars_bigtts', name: '灿灿 (温柔解说)' },
+  
+  // --- 英语专用/外语 ---
+  { id: 'en_male_adam', name: 'Adam (美式男声)' },
+  { id: 'en_female_sarah', name: 'Sarah (美式女声)' },
+
+  // --- 基础流式 (备用) ---
+  { id: 'BV001_streaming', name: '基础通用女声 (BV001)' },
+  { id: 'BV002_streaming', name: '基础通用男声 (BV002)' },
 ];
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave }) => {
   const [settings, setSettings] = useState<AppSettings>(getSettings());
+  const [cacheStatus, setCacheStatus] = useState<string>('');
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [clearingId, setClearingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('shadowing_history_v3');
+      if (saved) {
+        setHistory(JSON.parse(saved));
+      }
+    } catch (e) { console.error(e); }
+  }, []);
 
   const handleSave = () => {
     saveSettings(settings);
     onSave();
     onClose();
+  };
+
+  const handleClearAllCache = async () => {
+    if (confirm('确定要清空所有已下载的语音缓存吗？\n清空后下次播放将需要重新消耗网络流量。')) {
+      await clearAllTTSCache();
+      setCacheStatus('已清空');
+      setTimeout(() => setCacheStatus(''), 2000);
+    }
+  };
+
+  const handleClearUnitCache = async (item: HistoryItem) => {
+    setClearingId(item.id);
+    const count = await clearUnitCache(item.text);
+    alert(`已清理 "${item.title}" 相关的 ${count} 个音频缓存文件。`);
+    setClearingId(null);
   };
 
   return (
@@ -132,7 +170,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
               {/* Proxy Settings */}
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-2">
-                    <Globe className="w-3 h-3"/> CORS Proxy URL (Required for Doubao/Web)
+                    <Globe className="w-3 h-3"/> CORS Proxy URL (Optional)
                 </label>
                 <input 
                   type="text" 
@@ -141,9 +179,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                   placeholder="https://your-worker.workers.dev/corsproxy/"
                   className="w-full text-sm p-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
                 />
-                <p className="text-[10px] text-slate-400 mt-1">
-                   豆包 API 不支持浏览器直接调用 (CORS)。请部署 Cloudflare Worker 并在此填入地址。
-                </p>
               </div>
 
               {/* Doubao Config */}
@@ -169,7 +204,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                     />
                  </div>
                  <div>
-                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao Voice Model</label>
+                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao Voice Model (音色)</label>
                     <select
                       value={settings.doubaoVoice}
                       onChange={(e) => setSettings({...settings, doubaoVoice: e.target.value})}
@@ -179,6 +214,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                         <option key={v.id} value={v.id}>{v.name}</option>
                       ))}
                     </select>
+                 </div>
+                 
+                 {/* Cache Management */}
+                 <div className="pt-4 border-t border-emerald-100">
+                    <h5 className="text-xs font-bold text-slate-500 flex items-center gap-2 mb-2">
+                      <Database className="w-3 h-3" /> 历史记录缓存管理
+                    </h5>
+                    
+                    <div className="max-h-40 overflow-y-auto space-y-1 mb-2 custom-scrollbar pr-1">
+                      {history.length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">暂无历史记录</p>
+                      ) : (
+                        history.map(item => (
+                          <div key={item.id} className="flex justify-between items-center p-2 bg-slate-50 rounded border border-slate-100">
+                            <div className="overflow-hidden">
+                              <p className="text-xs font-medium text-slate-700 truncate w-40">{item.title}</p>
+                              <p className="text-[10px] text-slate-400">{item.date}</p>
+                            </div>
+                            <button 
+                              onClick={() => handleClearUnitCache(item)}
+                              disabled={clearingId === item.id}
+                              className="text-xs text-slate-400 hover:text-red-500 p-1.5 hover:bg-red-50 rounded transition-colors"
+                              title="清除该记录的音频缓存"
+                            >
+                              {clearingId === item.id ? <span className="animate-spin">...</span> : <Trash2 className="w-3 h-3"/>}
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <button 
+                      onClick={handleClearAllCache}
+                      className="w-full text-xs text-red-500 hover:bg-red-50 p-2 rounded flex items-center justify-center gap-1 transition-colors border border-dashed border-red-200 mt-2"
+                    >
+                      {cacheStatus === '已清空' ? <Check className="w-3 h-3"/> : <Trash2 className="w-3 h-3"/>}
+                      {cacheStatus || '一键清空所有缓存'}
+                    </button>
                  </div>
               </div>
 

@@ -6,7 +6,7 @@ import {
   Sparkles, Settings, Globe, Mic, Download, Wand2, Loader2, Edit3, Headphones
 } from 'lucide-react';
 import { SentencePair, HistoryItem, AppSettings } from './types';
-import { translateText, analyzeGrammar, generateSpeechUrl, generateFullTextAudio } from './services/aiService';
+import { translateText, analyzeGrammar, generateSpeechUrl, generateFullTextAudio, splitSentences } from './services/aiService';
 import { AnalysisModal } from './components/AnalysisModal';
 import { SettingsModal } from './components/SettingsModal';
 import { getSettings } from './utils/storage';
@@ -106,10 +106,7 @@ export default function App() {
 
   // --- Text Processing ---
   useEffect(() => {
-    const splitSentences = (txt: string) => {
-        if (!txt) return [];
-        return (txt.match(/[^.!?\n]+[.!?\n]?/g) || [txt]).map(s => s.trim()).filter(s => s.length > 0);
-    };
+    // Use shared logic from aiService
     const enSentences = splitSentences(text);
     const newPairs = enSentences.map(s => ({ text: s, trans: '', grammar: '' }));
     setPairs(newPairs);

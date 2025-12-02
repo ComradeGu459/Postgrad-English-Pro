@@ -4,7 +4,20 @@ import { pcmToWav, decodeBase64, mergeBuffers, createWavBlob } from '../utils/au
 import { getSettings } from '../utils/storage';
 import { AppSettings } from '../types';
 
+const TTS_CACHE_NAME = 'postgrad-doubao-tts-v1';
+
 // --- Helpers ---
+
+/**
+ * Consistent sentence splitting logic used by both App (Player) and Cache Manager.
+ */
+export const splitSentences = (txt: string): string[] => {
+    if (!txt) return [];
+    return (txt.match(/[^.!?\n]+[.!?\n]?/g) || [txt])
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+};
+
 const getGeminiClient = (key?: string) => {
   // Safety check for process.env to prevent white screen crashes in strict browser environments
   const envKey = typeof process !== 'undefined' ? process.env.API_KEY : '';
@@ -12,7 +25,6 @@ const getGeminiClient = (key?: string) => {
   
   if (!finalKey) {
      console.warn("Gemini API Key is missing. Please configure it in settings or environment.");
-     // We return a client that will likely fail on calls, but we don't crash the app initialization
   }
   return new GoogleGenAI({ apiKey: finalKey || 'DUMMY_KEY_FOR_INIT' });
 };
@@ -23,6 +35,60 @@ const uuidv4 = () => {
     const v = c === 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
   });
+};
+
+/**
+ * Generates a unique cache key (Fake URL) based on the request parameters.
+ */
+const getCacheKey = (text: string, voice: string, speed: number = 1.0) => {
+  const encodedText = encodeURIComponent(text);
+  return `https://local-tts-cache.app/doubao?text=${encodedText}&voice=${voice}&speed=${speed}`;
+};
+
+/**
+ * Clear ALL TTS Cache.
+ */
+export const clearAllTTSCache = async () => {
+  if (!('caches' in window)) return;
+  await caches.delete(TTS_CACHE_NAME);
+  console.log('TTS Cache completely cleared.');
+};
+
+/**
+ * Clears cache for a specific "History Unit" (Paragraph).
+ * It splits the paragraph into sentences and removes audio for each sentence.
+ * @returns Number of audio files deleted.
+ */
+export const clearUnitCache = async (fullText: string): Promise<number> => {
+  if (!('caches' in window)) return 0;
+
+  const sentences = splitSentences(fullText);
+  if (sentences.length === 0) return 0;
+
+  const cache = await caches.open(TTS_CACHE_NAME);
+  const keys = await cache.keys();
+  
+  let deletedCount = 0;
+
+  // We need to match the "text" parameter in the URL.
+  // Since we don't know the exact voice/speed used for every file, 
+  // we check if the URL's text param matches any of our sentences.
+  
+  for (const request of keys) {
+    try {
+      const url = new URL(request.url);
+      const cachedText = url.searchParams.get('text'); // Automatically decodes
+      
+      if (cachedText && sentences.includes(cachedText)) {
+        await cache.delete(request);
+        deletedCount++;
+      }
+    } catch (e) {
+      console.warn("Error parsing cache key", e);
+    }
+  }
+  
+  return deletedCount;
 };
 
 // --- LLM Services ---
@@ -180,19 +246,36 @@ const callGeminiTTS = async (text: string, apiKey: string): Promise<Uint8Array> 
   return decodeBase64(audioContent);
 };
 
-// V1 HTTP API Implementation for Doubao via Specific Worker
+// V1 HTTP API Implementation for Doubao with Persistent Caching
 const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice: string): Promise<Uint8Array> => {
   if (!apiKey || !appId) throw new Error("请在设置中配置豆包 AppID 和 Access Token");
   
-  // Specific Worker URL provided
   const targetUrl = 'https://weathered-doubao.comradegu.workers.dev/api/v1/tts';
-  const reqId = uuidv4();
+  // Use default speed 1.0 for cache key, or pass it if you parameterize speed later
+  const cacheKey = getCacheKey(text, voice, 1.0);
 
-  // Strict JSON Body Structure
+  // 1. Check Cache
+  if ('caches' in window) {
+    try {
+      const cache = await caches.open(TTS_CACHE_NAME);
+      const cachedResponse = await cache.match(cacheKey);
+      
+      if (cachedResponse) {
+        console.log(`[Doubao TTS] 命中本地缓存 (0流量): "${text.substring(0, 15)}..."`);
+        const arrayBuffer = await cachedResponse.arrayBuffer();
+        return new Uint8Array(arrayBuffer);
+      }
+    } catch (e) {
+      console.warn("Cache read failed, falling back to network", e);
+    }
+  }
+
+  // 2. Fetch from Network (Worker)
+  const reqId = uuidv4();
   const payload = {
     app: {
       appid: appId,
-      token: "access_token", // "Fake token" usually, real auth in header
+      token: "access_token",
       cluster: "volcano_tts"
     },
     user: {
@@ -215,7 +298,6 @@ const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice:
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Crucial: Bearer and token separated by semicolon
         'Authorization': `Bearer; ${apiKey}` 
       },
       body: JSON.stringify(payload)
@@ -232,7 +314,6 @@ const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice:
 
     const data = await response.json();
     
-    // V1 API response validation
     if (data.code !== 3000) {
       throw new Error(`Doubao API Error (${data.code}): ${data.message || 'Unknown Error'}`);
     }
@@ -241,7 +322,27 @@ const callDoubaoTTS = async (text: string, apiKey: string, appId: string, voice:
       throw new Error("No audio data received from Doubao API");
     }
 
-    return decodeBase64(data.data);
+    const audioData = decodeBase64(data.data);
+
+    // 3. Save to Cache
+    if ('caches' in window) {
+      try {
+        const cache = await caches.open(TTS_CACHE_NAME);
+        // Create a proper response object to store
+        const resToCache = new Response(audioData, {
+          headers: {
+            'Content-Type': 'audio/mpeg',
+            'X-Doubao-Voice': voice
+          }
+        });
+        await cache.put(cacheKey, resToCache);
+        console.log(`[Doubao TTS] 已缓存音频: "${text.substring(0, 15)}..."`);
+      } catch (e) {
+        console.warn("Cache write failed", e);
+      }
+    }
+
+    return audioData;
 
   } catch (e: any) {
     if (e.message.includes('Failed to fetch')) {
@@ -272,15 +373,9 @@ export const fetchRawAudio = async (text: string): Promise<Uint8Array> => {
 export const generateSpeechUrl = async (text: string): Promise<string> => {
   try {
     const rawBuffer = await fetchRawAudio(text);
-    // Note: If using mp3 from Doubao, we might want to return a blob with audio/mp3
-    // But createWavBlob wraps it in a wav container or we can just use the raw bytes if mp3
-    // For simplicity in this app structure, we convert to blob. 
-    // If the source is MP3, wrapping in WAV header is technically wrong but often works or we should just make a blob.
     
-    // Let's create a generic audio blob to support MP3/WAV
     const settings = getSettings();
     if (settings.ttsProvider === 'doubao') {
-        // Doubao returns MP3 based on our config above.
         const blob = new Blob([rawBuffer], { type: 'audio/mp3' });
         return URL.createObjectURL(blob);
     } else {
@@ -305,13 +400,10 @@ export const generateFullTextAudio = async (texts: string[], onProgress?: (curre
       processed++;
     }
     
-    // Note: Simple concatenation of MP3 files works reasonably well in many players but isn't spec-perfect.
-    // For WAV (Gemini), mergeBuffers works perfectly.
     const merged = mergeBuffers(buffers);
     const settings = getSettings();
     const type = settings.ttsProvider === 'doubao' ? 'audio/mp3' : 'audio/wav';
     
-    // If WAV, add header. If MP3, raw concat.
     if (type === 'audio/wav') {
          const blob = createWavBlob(merged, 24000);
          return URL.createObjectURL(blob);
