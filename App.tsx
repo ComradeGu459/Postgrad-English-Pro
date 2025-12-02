@@ -64,11 +64,19 @@ export default function App() {
 
   // --- Initialization ---
   useEffect(() => {
-    const saved = localStorage.getItem('shadowing_history_v3');
-    if (saved) setHistory(JSON.parse(saved));
+    try {
+      const saved = localStorage.getItem('shadowing_history_v3');
+      if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) setHistory(parsed);
+      }
+    } catch (e) {
+      console.error("Failed to load history", e);
+    }
     
     // Load voices for Browser TTS
     const loadVoices = () => {
+        if (!synth.current) return;
         const available = synth.current.getVoices();
         const enVoices = available.filter(v => v.lang.includes('en'));
         setVoices(enVoices.length > 0 ? enVoices : available);
@@ -118,7 +126,7 @@ export default function App() {
 
   const stopPlayback = () => {
     setIsPlaying(false);
-    synth.current.cancel();
+    if (synth.current) synth.current.cancel();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -165,7 +173,7 @@ export default function App() {
     if (index >= pairs.length || index < 0) { setIsPlaying(false); return; }
     
     // Stop any current playback
-    synth.current.cancel();
+    if (synth.current) synth.current.cancel();
     if (audioRef.current) audioRef.current.pause();
     if (timerRef.current) clearTimeout(timerRef.current);
 
@@ -214,7 +222,7 @@ export default function App() {
     
     speakTimeoutRef.current = setTimeout(() => { 
         uttr.current = utterance; 
-        synth.current.speak(utterance); 
+        if (synth.current) synth.current.speak(utterance); 
     }, 50);
   };
 

@@ -5,9 +5,15 @@ import { AppSettings } from '../types';
 
 // --- Helpers ---
 const getGeminiClient = (key?: string) => {
-  const finalKey = key || process.env.API_KEY;
-  if (!finalKey) throw new Error("Missing Gemini API Key");
-  return new GoogleGenAI({ apiKey: finalKey });
+  // Safety check for process.env to prevent white screen crashes in strict browser environments
+  const envKey = typeof process !== 'undefined' ? process.env.API_KEY : '';
+  const finalKey = key || envKey;
+  
+  if (!finalKey) {
+     console.warn("Gemini API Key is missing. Please configure it in settings or environment.");
+     // We return a client that will likely fail on calls, but we don't crash the app initialization
+  }
+  return new GoogleGenAI({ apiKey: finalKey || 'DUMMY_KEY_FOR_INIT' });
 };
 
 // Polyfill for UUID
@@ -209,12 +215,7 @@ const callDoubaoTTS = (text: string, settings: AppSettings): Promise<Uint8Array>
 
       // V3 Protocol Frame Construction
       // [Header 4B] + [Payload Size 4B] + [Payload]
-      
       // Header: 0x11101000
-      // Byte 0: 0x11 (Ver 1, Header Size 4)
-      // Byte 1: 0x10 (MsgType 1 [Full Client Req], Flags 0)
-      // Byte 2: 0x10 (Serial 1 [JSON], Comp 0 [None])
-      // Byte 3: 0x00 (Reserved)
       const header = new Uint8Array([0x11, 0x10, 0x10, 0x00]);
       
       const len = requestBytes.length;
@@ -239,7 +240,7 @@ const callDoubaoTTS = (text: string, settings: AppSettings): Promise<Uint8Array>
       // 8...: Payload
       
       const msgType = view.getUint8(1) >> 4;
-      const payloadSize = view.getUint32(4, false); // Big Endian
+      // const payloadSize = view.getUint32(4, false); // Big Endian
       
       if (msgType === 0xB) { // 0xB (11) = Audio Response
         // Payload Structure for Audio (MsgType 0xB):
@@ -271,14 +272,10 @@ const callDoubaoTTS = (text: string, settings: AppSettings): Promise<Uint8Array>
         
       } else if (msgType === 0xF) { // 0xF (15) = Error
         // Payload Structure for Error:
-        // [4B Error Code] + [Error Message Length 4B] + [Error Message]
-        // Note: The structure varies, but usually payload contains the error info.
-        // Let's interpret the payload as a string for safety if possible, or parsing the JSON/Structure.
-        // Assuming standard error payload is JSON or String inside.
-        // Actually, V3 Error payload: [4B Code] + [Payload]
+        // [4B Error Code] + [Payload]
         const errCode = view.getUint32(8, false);
         const decoder = new TextDecoder();
-        // Try decoding the rest of payload
+        // Try decoding the rest of payload (skipping header 4 + size 4 + errCode 4 = 12)
         const msgBytes = new Uint8Array(buffer.slice(12)); 
         const errMsg = decoder.decode(msgBytes);
         console.error(`Doubao TTS Error (Code ${errCode}): ${errMsg}`);
@@ -286,17 +283,13 @@ const callDoubaoTTS = (text: string, settings: AppSettings): Promise<Uint8Array>
         socket.close();
         reject(new Error(`Doubao API Error ${errCode}: ${errMsg}`));
       }
-      
-      // Check for last frame?
-      // V3 usually relies on connection close or specific event for stream end.
-      // However, for Unidirectional, the server often closes after sending.
     };
 
     socket.onerror = (e) => {
       console.error("WebSocket Error:", e);
       if (!hasError) {
         hasError = true;
-        reject(new Error("WebSocket connection failed. Please check AppID/Token."));
+        reject(new Error("WebSocket connection failed. Please check AppID/Token and Network."));
       }
     };
     
