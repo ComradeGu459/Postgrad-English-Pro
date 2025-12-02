@@ -37,7 +37,10 @@ export default function App() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [downloadingIndex, setDownloadingIndex] = useState<number | null>(null);
+  
   const [isDownloadingFull, setIsDownloadingFull] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{current: number, total: number} | null>(null);
+
   const [loadingAudioIndex, setLoadingAudioIndex] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   
@@ -290,9 +293,15 @@ export default function App() {
     if (pairs.length === 0) return;
     
     setIsDownloadingFull(true);
+    setDownloadProgress({ current: 0, total: pairs.length });
+    
     try {
         const sentences = pairs.map(p => p.text);
-        const wavUrl = await generateFullTextAudio(sentences);
+        
+        const wavUrl = await generateFullTextAudio(sentences, (curr, total) => {
+            setDownloadProgress({ current: curr, total });
+        });
+
         const a = document.createElement('a');
         a.href = wavUrl;
         a.download = `${title || 'full_audio'}.wav`;
@@ -300,9 +309,10 @@ export default function App() {
         a.click();
         document.body.removeChild(a);
     } catch (e: any) {
-        alert("全文生成失败 (可能是API限制或网络问题): " + e.message);
+        alert("全文生成失败 (API 错误或网络问题): " + e.message);
     } finally {
         setIsDownloadingFull(false);
+        setDownloadProgress(null);
     }
   };
 
@@ -599,10 +609,10 @@ export default function App() {
               <button 
                 onClick={handleDownloadFullAudio}
                 disabled={isDownloadingFull || pairs.length === 0}
-                className="hidden md:flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 text-sm font-bold rounded-full hover:bg-indigo-100 transition-colors disabled:opacity-50 border border-indigo-100 whitespace-nowrap"
+                className="hidden md:flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 text-sm font-bold rounded-full hover:bg-indigo-100 transition-colors disabled:opacity-50 border border-indigo-100 whitespace-nowrap min-w-[140px] justify-center"
               >
                   {isDownloadingFull ? <Loader2 className="w-4 h-4 animate-spin"/> : <Download className="w-4 h-4"/>}
-                  {isDownloadingFull ? "Merging..." : "全文下载"}
+                  {isDownloadingFull && downloadProgress ? `Merging ${downloadProgress.current}/${downloadProgress.total}` : "全文下载"}
               </button>
           </div>
       </div>

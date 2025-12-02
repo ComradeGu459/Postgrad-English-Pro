@@ -1,3 +1,4 @@
+
 import { AppSettings } from '../types';
 
 const STORAGE_KEY = 'postgrad_eng_settings_v1';
@@ -9,7 +10,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   deepseekKey: '',
   doubaoAppId: '',
   doubaoToken: '',
-  doubaoVoiceId: 'zh_female_shengya_moon_bigtts', // High quality default
+  doubaoVoiceId: 'BV001_streaming', // Use a standard streaming voice by default
   doubaoSpeed: 1.0,
 };
 

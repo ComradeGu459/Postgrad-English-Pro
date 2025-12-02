@@ -9,11 +9,10 @@ interface SettingsModalProps {
 }
 
 const DOUBAO_VOICES = [
-  { id: 'zh_female_shengya_moon_bigtts', name: 'Shengya (清新女声 - BigTTS)' },
-  { id: 'zh_male_yuanbo_moon_bigtts', name: 'Yuanbo (沉稳男声 - BigTTS)' },
-  { id: 'zh_female_cancan_mars_bigtts', name: 'Cancan (通用女声)' },
-  { id: 'zh_male_chun_mars_bigtts', name: 'Chun (通用男声)' },
-  { id: 'BV700_streaming', name: 'General V700 (标准)' },
+  { id: 'BV001_streaming', name: 'BV001 (English Male - BigTTS)' },
+  { id: 'BV002_streaming', name: 'BV002 (English Female - BigTTS)' },
+  { id: 'zh_female_cancan_mars_bigtts', name: 'Cancan (Chinese/Eng - Recommended)' },
+  { id: 'zh_male_yuanbo_moon_bigtts', name: 'Yuanbo (Chinese/Eng Male)' },
 ];
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave }) => {
@@ -133,7 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                       type="text" 
                       value={settings.doubaoAppId}
                       onChange={(e) => setSettings({...settings, doubaoAppId: e.target.value})}
-                      placeholder="App ID"
+                      placeholder="e.g. BigTTS200..."
                       className="w-full text-sm p-2 border border-pink-200 rounded focus:ring-2 focus:ring-pink-500 outline-none font-mono"
                     />
                  </div>
@@ -143,10 +142,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                       type="password" 
                       value={settings.doubaoToken}
                       onChange={(e) => setSettings({...settings, doubaoToken: e.target.value})}
-                      placeholder="Access Token"
+                      placeholder="Volcengine Access Token"
                       className="w-full text-sm p-2 border border-pink-200 rounded focus:ring-2 focus:ring-pink-500 outline-none font-mono"
                     />
                  </div>
+                 <p className="col-span-2 text-[10px] text-slate-400 leading-normal">
+                    注意：请确保已在火山引擎控制台开通 <b>语音合成</b> 服务，并绑定 BigTTS 试用包。<br/>
+                    本应用使用 V3 协议，需确保 Token 权限正确。
+                 </p>
               </div>
             </div>
           </section>

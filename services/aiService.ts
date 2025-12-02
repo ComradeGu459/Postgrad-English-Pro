@@ -1,12 +1,24 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { pcmToWav, decodeBase64, mergeBuffers, createWavBlob } from '../utils/audioUtils';
 import { getSettings } from '../utils/storage';
+import { AppSettings } from '../types';
 
 // --- Helpers ---
 const getGeminiClient = (key?: string) => {
   const finalKey = key || process.env.API_KEY;
   if (!finalKey) throw new Error("Missing Gemini API Key");
   return new GoogleGenAI({ apiKey: finalKey });
+};
+
+// Polyfill for UUID
+const uuidv4 = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 };
 
 // --- LLM Services ---
@@ -144,120 +156,171 @@ export const analyzeTerm = async (term: string): Promise<string> => {
 
 // --- TTS Services ---
 
-// Doubao/Volcengine TTS using WebSocket (Bypasses CORS)
-const callDoubaoTTS = (text: string, settings: any): Promise<Uint8Array> => {
+// Doubao/Volcengine TTS using V3 WebSocket Protocol (unidirectional/stream)
+const callDoubaoTTS = (text: string, settings: AppSettings): Promise<Uint8Array> => {
   return new Promise((resolve, reject) => {
     if (!settings.doubaoAppId || !settings.doubaoToken) {
       return reject(new Error("请在设置中配置豆包 AppID 和 Token"));
     }
 
-    // Browsers cannot set custom headers for WebSocket handshake.
-    // We attempt to pass the Authorization via query parameter as a fallback.
-    // Format: ?Authorization=Bearer;TOKEN
-    const authValue = `Bearer;${settings.doubaoToken}`;
-    const wsUrl = `wss://openspeech.bytedance.com/api/v1/tts/ws_binary?Authorization=${encodeURIComponent(authValue)}`;
-    
-    const socket = new WebSocket(wsUrl);
-    const audioChunks: Uint8Array[] = [];
+    const voice = settings.doubaoVoiceId || 'BV001_streaming';
+    const speed = settings.doubaoSpeed || 1.0;
+    // Default to 'seed-tts-1.0' or specific resource if needed. 
+    // Using character version default from docs if not specified.
+    const resourceId = 'volc.service_type.10029';
 
+    // Construct V3 WebSocket URL
+    // We use query parameters to pass authentication because standard Browser WebSocket API 
+    // does not support custom headers.
+    const wsUrl = new URL('wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream');
+    wsUrl.searchParams.append('appid', settings.doubaoAppId);
+    wsUrl.searchParams.append('access_token', settings.doubaoToken);
+    wsUrl.searchParams.append('resource_id', resourceId);
+
+    console.log("Connecting to Doubao TTS V3:", wsUrl.toString().replace(settings.doubaoToken, '***'));
+
+    const socket = new WebSocket(wsUrl.toString());
     socket.binaryType = 'arraybuffer';
+    
+    const audioChunks: Uint8Array[] = [];
+    let hasError = false;
 
     socket.onopen = () => {
-      const reqId = crypto.randomUUID();
-      const payload = JSON.stringify({
-        app: {
-          appid: settings.doubaoAppId,
-          token: settings.doubaoToken, // "fake" token in payload, real auth in handshake
-          cluster: 'volcano_tts'
+      const reqId = uuidv4();
+      
+      const payload = {
+        user: { 
+            uid: 'web_user_' + Math.floor(Math.random() * 10000) 
         },
-        user: { uid: 'web_user' },
-        audio: {
-          voice_type: settings.doubaoVoiceId,
-          encoding: 'pcm',
-          speed_ratio: settings.doubaoSpeed || 1.0,
-          rate: 24000
-        },
-        request: {
-          reqid: reqId,
+        req_params: {
           text: text,
-          operation: 'submit' // Important: submit for streaming
+          speaker: voice,
+          audio_params: {
+            format: 'pcm', // Using PCM for seamless merging
+            sample_rate: 24000,
+            speed_ratio: speed,
+          },
+          reqid: reqId
         }
-      });
+      };
 
-      // Construct Header (4 bytes)
-      // Byte 0: Version (4 bits) | Header Size (4 bits) -> 0x1 | 0x1 = 0x11
-      // Byte 1: Msg Type (4 bits) | Flags (4 bits) -> 0x1 (Full Client Req) | 0x0 = 0x10
-      // Byte 2: Serialization (4 bits) | Compression (4 bits) -> 0x1 (JSON) | 0x0 (None) = 0x10
-      // Byte 3: Reserved = 0x00
+      const requestJson = JSON.stringify(payload);
+      const requestBytes = new TextEncoder().encode(requestJson);
+
+      // V3 Protocol Frame Construction
+      // [Header 4B] + [Payload Size 4B] + [Payload]
+      
+      // Header: 0x11101000
+      // Byte 0: 0x11 (Ver 1, Header Size 4)
+      // Byte 1: 0x10 (MsgType 1 [Full Client Req], Flags 0)
+      // Byte 2: 0x10 (Serial 1 [JSON], Comp 0 [None])
+      // Byte 3: 0x00 (Reserved)
       const header = new Uint8Array([0x11, 0x10, 0x10, 0x00]);
+      
+      const len = requestBytes.length;
+      const sizeBytes = new Uint8Array(4);
+      new DataView(sizeBytes.buffer).setUint32(0, len, false); // Big Endian
 
-      // Encode Payload
-      const encoder = new TextEncoder();
-      const payloadBytes = encoder.encode(payload);
-
-      // Combine
-      const message = new Uint8Array(header.length + payloadBytes.length);
-      message.set(header, 0);
-      message.set(payloadBytes, header.length);
-
-      socket.send(message);
+      const frame = new Uint8Array(header.length + sizeBytes.length + requestBytes.length);
+      frame.set(header, 0);
+      frame.set(sizeBytes, header.length);
+      frame.set(requestBytes, header.length + sizeBytes.length);
+      
+      socket.send(frame);
     };
 
     socket.onmessage = (event) => {
       const buffer = event.data as ArrayBuffer;
       const view = new DataView(buffer);
-      // Byte 0: Version/HeaderSize
-      const headerSize = (view.getUint8(0) & 0x0F) * 4; 
-      // Byte 1: MsgType/Flags
-      const msgType = (view.getUint8(1) >> 4); 
-      const flags = (view.getUint8(1) & 0x0F); 
       
-      // MsgType 0xB (11) is Audio-only server response
-      if (msgType === 0xB) { 
-        // Payload is raw audio (PCM)
-        const audioData = new Uint8Array(buffer.slice(headerSize));
-        if (audioData.length > 0) {
-           audioChunks.push(audioData);
+      // Basic V3 Frame Parsing
+      // 0-3: Header
+      // 4-7: Payload Size
+      // 8...: Payload
+      
+      const msgType = view.getUint8(1) >> 4;
+      const payloadSize = view.getUint32(4, false); // Big Endian
+      
+      if (msgType === 0xB) { // 0xB (11) = Audio Response
+        // Payload Structure for Audio (MsgType 0xB):
+        // [4B Event Code] + [4B SessionID Len] + [SessionID] + [4B Audio Len] + [Audio Data]
+        
+        // 1. Skip Header (4) + Size (4) -> Offset 8
+        let offset = 8;
+        
+        // 2. Read Event Code (Should be 352 for Audio, or others)
+        // const eventCode = view.getUint32(offset, false); 
+        offset += 4;
+        
+        // 3. Read Session ID Length
+        const sessionIdLen = view.getUint32(offset, false);
+        offset += 4;
+        
+        // 4. Skip Session ID
+        offset += sessionIdLen;
+        
+        // 5. Read Audio Length
+        const audioLen = view.getUint32(offset, false);
+        offset += 4;
+        
+        // 6. Extract Audio
+        if (offset + audioLen <= buffer.byteLength) {
+            const audioData = new Uint8Array(buffer.slice(offset, offset + audioLen));
+            audioChunks.push(audioData);
         }
-
-        // Flags: 0=no seq, 1=seq>0, 2=neg seq (last), 3=neg seq (last)
-        if (flags >= 2) { 
-           socket.close();
-           resolve(mergeBuffers(audioChunks));
-        }
-      } else if (msgType === 0xF) { // Error message
+        
+      } else if (msgType === 0xF) { // 0xF (15) = Error
+        // Payload Structure for Error:
+        // [4B Error Code] + [Error Message Length 4B] + [Error Message]
+        // Note: The structure varies, but usually payload contains the error info.
+        // Let's interpret the payload as a string for safety if possible, or parsing the JSON/Structure.
+        // Assuming standard error payload is JSON or String inside.
+        // Actually, V3 Error payload: [4B Code] + [Payload]
+        const errCode = view.getUint32(8, false);
         const decoder = new TextDecoder();
-        const errorMsg = decoder.decode(buffer.slice(headerSize));
-        console.error("Doubao WS Error Payload:", errorMsg);
+        // Try decoding the rest of payload
+        const msgBytes = new Uint8Array(buffer.slice(12)); 
+        const errMsg = decoder.decode(msgBytes);
+        console.error(`Doubao TTS Error (Code ${errCode}): ${errMsg}`);
+        hasError = true;
         socket.close();
-        reject(new Error(`Doubao Error: ${errorMsg}`));
+        reject(new Error(`Doubao API Error ${errCode}: ${errMsg}`));
       }
+      
+      // Check for last frame?
+      // V3 usually relies on connection close or specific event for stream end.
+      // However, for Unidirectional, the server often closes after sending.
     };
 
     socket.onerror = (e) => {
-      console.error("WebSocket Error", e);
-      // Since onerror gives no details in browser, we provide a generic hint about Auth
-      reject(new Error("WebSocket handshake failed. Please check your AppID and Token."));
+      console.error("WebSocket Error:", e);
+      if (!hasError) {
+        hasError = true;
+        reject(new Error("WebSocket connection failed. Please check AppID/Token."));
+      }
     };
     
     socket.onclose = (e) => {
-        if (!e.wasClean && audioChunks.length === 0) {
-             // If closed without being clean and no data received, it's likely an auth error
-             reject(new Error("Connection closed unexpectedly."));
+        if (!hasError) {
+            if (audioChunks.length > 0) {
+                resolve(mergeBuffers(audioChunks));
+            } else {
+                reject(new Error(`Connection closed without audio (Code: ${e.code}).`));
+            }
         }
     };
 
-    // Safety timeout (30s)
+    // Timeout protection (15s)
     setTimeout(() => {
         if (socket.readyState !== WebSocket.CLOSED) {
             socket.close();
-            if (audioChunks.length > 0) {
-                 resolve(mergeBuffers(audioChunks)); // Resolve with what we have
-            } else {
-                 reject(new Error("TTS Timeout"));
+            if (audioChunks.length > 0 && !hasError) {
+                 resolve(mergeBuffers(audioChunks)); 
+            } else if (!hasError) {
+                 reject(new Error("TTS request timed out (15s)"));
             }
         }
-    }, 30000); 
+    }, 15000); 
   });
 };
 
@@ -305,14 +368,16 @@ export const generateSpeechUrl = async (text: string): Promise<string> => {
   }
 };
 
-export const generateFullTextAudio = async (texts: string[]): Promise<string> => {
+export const generateFullTextAudio = async (texts: string[], onProgress?: (current: number, total: number) => void): Promise<string> => {
   try {
     const buffers: Uint8Array[] = [];
-    // Process sequentially to avoid rate limits and ensure order
+    let processed = 0;
+    
     for (const text of texts) {
+      if (onProgress) onProgress(processed + 1, texts.length);
       const buffer = await fetchRawAudio(text);
       buffers.push(buffer);
-      // Optional: Add small silence?
+      processed++;
     }
     
     const merged = mergeBuffers(buffers);
