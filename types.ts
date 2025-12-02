@@ -26,10 +26,8 @@ export interface AppSettings {
   // Keys
   geminiKey: string;
   deepseekKey: string;
-  doubaoAppId: string;
-  doubaoToken: string;
+  doubaoKey: string;
   
-  // Configs
-  doubaoVoiceId: string;
-  doubaoSpeed: number;
+  // Config
+  doubaoVoice: string;
 }

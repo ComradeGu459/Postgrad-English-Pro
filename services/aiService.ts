@@ -16,17 +16,6 @@ const getGeminiClient = (key?: string) => {
   return new GoogleGenAI({ apiKey: finalKey || 'DUMMY_KEY_FOR_INIT' });
 };
 
-// Polyfill for UUID
-const uuidv4 = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-};
-
 // --- LLM Services ---
 
 const callDeepSeek = async (messages: any[], apiKey: string) => {
@@ -162,161 +151,6 @@ export const analyzeTerm = async (term: string): Promise<string> => {
 
 // --- TTS Services ---
 
-// Doubao/Volcengine TTS using V3 WebSocket Protocol (unidirectional/stream)
-const callDoubaoTTS = (text: string, settings: AppSettings): Promise<Uint8Array> => {
-  return new Promise((resolve, reject) => {
-    if (!settings.doubaoAppId || !settings.doubaoToken) {
-      return reject(new Error("请在设置中配置豆包 AppID 和 Token"));
-    }
-
-    const voice = settings.doubaoVoiceId || 'BV001_streaming';
-    const speed = settings.doubaoSpeed || 1.0;
-    // Default to 'seed-tts-1.0' or specific resource if needed. 
-    // Using character version default from docs if not specified.
-    const resourceId = 'volc.service_type.10029';
-
-    // Construct V3 WebSocket URL
-    // We use query parameters to pass authentication because standard Browser WebSocket API 
-    // does not support custom headers.
-    const wsUrl = new URL('wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream');
-    wsUrl.searchParams.append('appid', settings.doubaoAppId);
-    wsUrl.searchParams.append('access_token', settings.doubaoToken);
-    wsUrl.searchParams.append('resource_id', resourceId);
-
-    console.log("Connecting to Doubao TTS V3:", wsUrl.toString().replace(settings.doubaoToken, '***'));
-
-    const socket = new WebSocket(wsUrl.toString());
-    socket.binaryType = 'arraybuffer';
-    
-    const audioChunks: Uint8Array[] = [];
-    let hasError = false;
-
-    socket.onopen = () => {
-      const reqId = uuidv4();
-      
-      const payload = {
-        user: { 
-            uid: 'web_user_' + Math.floor(Math.random() * 10000) 
-        },
-        req_params: {
-          text: text,
-          speaker: voice,
-          audio_params: {
-            format: 'pcm', // Using PCM for seamless merging
-            sample_rate: 24000,
-            speed_ratio: speed,
-          },
-          reqid: reqId
-        }
-      };
-
-      const requestJson = JSON.stringify(payload);
-      const requestBytes = new TextEncoder().encode(requestJson);
-
-      // V3 Protocol Frame Construction
-      // [Header 4B] + [Payload Size 4B] + [Payload]
-      // Header: 0x11101000
-      const header = new Uint8Array([0x11, 0x10, 0x10, 0x00]);
-      
-      const len = requestBytes.length;
-      const sizeBytes = new Uint8Array(4);
-      new DataView(sizeBytes.buffer).setUint32(0, len, false); // Big Endian
-
-      const frame = new Uint8Array(header.length + sizeBytes.length + requestBytes.length);
-      frame.set(header, 0);
-      frame.set(sizeBytes, header.length);
-      frame.set(requestBytes, header.length + sizeBytes.length);
-      
-      socket.send(frame);
-    };
-
-    socket.onmessage = (event) => {
-      const buffer = event.data as ArrayBuffer;
-      const view = new DataView(buffer);
-      
-      // Basic V3 Frame Parsing
-      // 0-3: Header
-      // 4-7: Payload Size
-      // 8...: Payload
-      
-      const msgType = view.getUint8(1) >> 4;
-      // const payloadSize = view.getUint32(4, false); // Big Endian
-      
-      if (msgType === 0xB) { // 0xB (11) = Audio Response
-        // Payload Structure for Audio (MsgType 0xB):
-        // [4B Event Code] + [4B SessionID Len] + [SessionID] + [4B Audio Len] + [Audio Data]
-        
-        // 1. Skip Header (4) + Size (4) -> Offset 8
-        let offset = 8;
-        
-        // 2. Read Event Code (Should be 352 for Audio, or others)
-        // const eventCode = view.getUint32(offset, false); 
-        offset += 4;
-        
-        // 3. Read Session ID Length
-        const sessionIdLen = view.getUint32(offset, false);
-        offset += 4;
-        
-        // 4. Skip Session ID
-        offset += sessionIdLen;
-        
-        // 5. Read Audio Length
-        const audioLen = view.getUint32(offset, false);
-        offset += 4;
-        
-        // 6. Extract Audio
-        if (offset + audioLen <= buffer.byteLength) {
-            const audioData = new Uint8Array(buffer.slice(offset, offset + audioLen));
-            audioChunks.push(audioData);
-        }
-        
-      } else if (msgType === 0xF) { // 0xF (15) = Error
-        // Payload Structure for Error:
-        // [4B Error Code] + [Payload]
-        const errCode = view.getUint32(8, false);
-        const decoder = new TextDecoder();
-        // Try decoding the rest of payload (skipping header 4 + size 4 + errCode 4 = 12)
-        const msgBytes = new Uint8Array(buffer.slice(12)); 
-        const errMsg = decoder.decode(msgBytes);
-        console.error(`Doubao TTS Error (Code ${errCode}): ${errMsg}`);
-        hasError = true;
-        socket.close();
-        reject(new Error(`Doubao API Error ${errCode}: ${errMsg}`));
-      }
-    };
-
-    socket.onerror = (e) => {
-      console.error("WebSocket Error:", e);
-      if (!hasError) {
-        hasError = true;
-        reject(new Error("WebSocket connection failed. Please check AppID/Token and Network."));
-      }
-    };
-    
-    socket.onclose = (e) => {
-        if (!hasError) {
-            if (audioChunks.length > 0) {
-                resolve(mergeBuffers(audioChunks));
-            } else {
-                reject(new Error(`Connection closed without audio (Code: ${e.code}).`));
-            }
-        }
-    };
-
-    // Timeout protection (15s)
-    setTimeout(() => {
-        if (socket.readyState !== WebSocket.CLOSED) {
-            socket.close();
-            if (audioChunks.length > 0 && !hasError) {
-                 resolve(mergeBuffers(audioChunks)); 
-            } else if (!hasError) {
-                 reject(new Error("TTS request timed out (15s)"));
-            }
-        }
-    }, 15000); 
-  });
-};
-
 const callGeminiTTS = async (text: string, apiKey: string): Promise<Uint8Array> => {
   const ai = getGeminiClient(apiKey);
   const response = await ai.models.generateContent({
@@ -337,16 +171,86 @@ const callGeminiTTS = async (text: string, apiKey: string): Promise<Uint8Array> 
   return decodeBase64(audioContent);
 };
 
+const callDoubaoTTS = async (text: string, apiKey: string, voice: string): Promise<Uint8Array> => {
+  if (!apiKey) throw new Error("请在设置中配置豆包 API Key");
+  
+  const url = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
+  
+  // Standard Resource ID for BigTTS as per documentation
+  const resourceId = 'volc.service_type.10029'; 
+
+  // Config params for Doubao engine optimization
+  const additionsObj = {
+    disable_markdown_filter: true,
+    enable_language_detector: true,
+    enable_latex_tn: true,
+    disable_default_bit_rate: true,
+    max_length_to_filter_parenthesis: 0,
+    cache_config: { text_type: 1, use_cache: true }
+  };
+
+  const payload = {
+    user: {
+      uid: "postgrad_user"
+    },
+    req_params: {
+      text: text,
+      speaker: voice, 
+      additions: JSON.stringify(additionsObj), 
+      audio_params: {
+        format: 'pcm', 
+        sample_rate: 24000
+      }
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Note the semicolon: 'Bearer; token' is often required by ByteDance APIs
+        'Authorization': `Bearer; ${apiKey}`,
+        'X-Api-Resource-Id': resourceId
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      let errMsg = `Doubao API Error: ${response.status}`;
+      try {
+        const errJson = await response.json();
+        if (errJson.message) errMsg += ` - ${errJson.message}`;
+        if (errJson.code) errMsg += ` (Code: ${errJson.code})`;
+      } catch(e) {
+         // ignore JSON parse error
+         const textBody = await response.text();
+         if(textBody) errMsg += ` - ${textBody.substring(0, 100)}`;
+      }
+      throw new Error(errMsg);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  } catch (e: any) {
+    // Check for potential CORS/Network errors which often appear as "Failed to fetch"
+    if (e.message === 'Failed to fetch') {
+       throw new Error("网络请求失败 (CORS)。请检查 API Key 是否正确，或尝试更换网络环境。如果问题持续，可能是浏览器跨域限制导致的。");
+    }
+    throw e;
+  }
+};
+
 // --- Public TTS APIs ---
 
 export const fetchRawAudio = async (text: string): Promise<Uint8Array> => {
   const settings = getSettings();
-  if (settings.ttsProvider === 'doubao') {
-    return await callDoubaoTTS(text, settings);
-  } else if (settings.ttsProvider === 'gemini') {
+  if (settings.ttsProvider === 'gemini') {
     return await callGeminiTTS(text, settings.geminiKey);
+  } else if (settings.ttsProvider === 'doubao') {
+    return await callDoubaoTTS(text, settings.doubaoKey, settings.doubaoVoice);
   } else {
-    throw new Error("Browser TTS does not support raw audio fetching.");
+    throw new Error("Browser TTS does not support raw audio fetching. Use Cloud TTS (Gemini/Doubao).");
   }
 };
 

@@ -144,7 +144,7 @@ export default function App() {
     console.error("Audio Playback Error", e);
     setIsPlaying(false);
     setLoadingAudioIndex(null);
-    alert("播放出错，请检查网络或 TTS 设置。如果使用的是豆包，请确认 AppID/Token 正确且已开通服务。");
+    alert("播放出错，请检查网络或 TTS 设置。如果使用的是 Cloud TTS，请确认 API Key 正确。");
   };
 
   const scheduleNext = (completedIndex: number) => {
@@ -179,7 +179,7 @@ export default function App() {
 
     const sentence = pairs[index].text;
 
-    // --- Strategy 1: Cloud TTS (Doubao / Gemini) ---
+    // --- Strategy 1: Cloud TTS (Gemini) ---
     if (settings.ttsProvider !== 'browser') {
         try {
             setLoadingAudioIndex(index);
@@ -294,7 +294,7 @@ export default function App() {
 
   const handleDownloadFullAudio = async () => {
     if (settings.ttsProvider === 'browser') {
-        alert("浏览器语音不支持全文下载，请在设置中切换为 Cloud TTS (Gemini/豆包)。");
+        alert("浏览器语音不支持全文下载，请在设置中切换为 Cloud TTS (Gemini)。");
         return;
     }
     
@@ -440,7 +440,7 @@ export default function App() {
                  <button onClick={() => setShowHistory(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg"><History className="w-5 h-5" /></button>
                  <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg relative">
                      <Settings className="w-5 h-5" />
-                     {(!settings.deepseekKey && !settings.doubaoToken) && <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>}
+                     {(!settings.deepseekKey && settings.llmProvider === 'deepseek') && <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>}
                  </button>
                  <button onClick={() => {
                      const newEntry = { id: Date.now(), title: title || `Untitled`, text, date: new Date().toLocaleDateString() };
@@ -602,7 +602,7 @@ export default function App() {
                       {settings.ttsProvider === 'browser' ? (
                           <span className="flex items-center gap-1"><Globe className="w-3 h-3"/> Browser TTS</span>
                       ) : (
-                          <span className="flex items-center gap-1 text-pink-600"><Mic className="w-3 h-3"/> {settings.ttsProvider === 'doubao' ? 'Doubao BigTTS' : 'Gemini Cloud'}</span>
+                          <span className="flex items-center gap-1 text-pink-600"><Mic className="w-3 h-3"/> Gemini Cloud</span>
                       )}
                   </div>
 

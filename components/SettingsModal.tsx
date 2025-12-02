@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { X, Save, Key, Server, Mic, Cpu } from 'lucide-react';
-import { AppSettings, LLMProvider, TTSProvider } from '../types';
+import { AppSettings } from '../types';
 import { getSettings, saveSettings } from '../utils/storage';
 
 interface SettingsModalProps {
@@ -9,10 +9,13 @@ interface SettingsModalProps {
 }
 
 const DOUBAO_VOICES = [
-  { id: 'BV001_streaming', name: 'BV001 (English Male - BigTTS)' },
-  { id: 'BV002_streaming', name: 'BV002 (English Female - BigTTS)' },
-  { id: 'zh_female_cancan_mars_bigtts', name: 'Cancan (Chinese/Eng - Recommended)' },
-  { id: 'zh_male_yuanbo_moon_bigtts', name: 'Yuanbo (Chinese/Eng Male)' },
+  { id: 'BV001_streaming', name: '通用女声 (BV001)' },
+  { id: 'BV002_streaming', name: '通用男声 (BV002)' },
+  { id: 'zh_female_shuangkuaisisi_moon_bigtts', name: '爽快思思 (生动/推荐)' },
+  { id: 'zh_male_beijingxiaoye_emo_v2_mars_bigtts', name: '北京小爷 (情感版)' },
+  { id: 'zh_female_cancan_mars_bigtts', name: '灿灿 (解说)' },
+  { id: 'zh_female_zhichuxin_moon_bigtts', name: '知性楚欣 (新闻/正式)' },
+  { id: 'zh_male_chunhouxiaoyu_moon_bigtts', name: '醇厚小宇 (有声书)' }
 ];
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave }) => {
@@ -85,7 +88,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                   </button>
                   <button 
                     onClick={() => setSettings({...settings, ttsProvider: 'doubao'})}
-                    className={`py-2 px-1 text-xs font-medium rounded-md transition-all ${settings.ttsProvider === 'doubao' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`py-2 px-1 text-xs font-medium rounded-md transition-all ${settings.ttsProvider === 'doubao' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     豆包
                   </button>
@@ -94,13 +97,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
             </div>
           </section>
 
-          {/* API Keys Config */}
+          {/* Configuration */}
           <section>
              <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Key className="w-4 h-4" /> 密钥配置 (API Keys)
+              <Key className="w-4 h-4" /> 详细配置
             </h4>
             <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
-              {/* Gemini */}
+              
+              {/* Gemini Key */}
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">Gemini API Key</label>
                 <input 
@@ -112,7 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                 />
               </div>
 
-              {/* DeepSeek */}
+              {/* DeepSeek Key */}
               <div className={settings.llmProvider === 'deepseek' ? 'block' : 'opacity-50'}>
                 <label className="block text-xs font-semibold text-blue-600 mb-1">DeepSeek API Key (sk-...)</label>
                 <input 
@@ -124,71 +128,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave })
                 />
               </div>
 
-              {/* Doubao */}
-              <div className={`grid grid-cols-2 gap-4 ${settings.ttsProvider === 'doubao' ? 'block' : 'opacity-50'}`}>
-                 <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-semibold text-pink-600 mb-1">Volcengine AppID</label>
-                    <input 
-                      type="text" 
-                      value={settings.doubaoAppId}
-                      onChange={(e) => setSettings({...settings, doubaoAppId: e.target.value})}
-                      placeholder="e.g. BigTTS200..."
-                      className="w-full text-sm p-2 border border-pink-200 rounded focus:ring-2 focus:ring-pink-500 outline-none font-mono"
-                    />
-                 </div>
-                 <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-semibold text-pink-600 mb-1">Access Token</label>
+              {/* Doubao Config */}
+              <div className={settings.ttsProvider === 'doubao' ? 'space-y-3 pt-3 border-t border-slate-200' : 'hidden'}>
+                 <div>
+                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao API Key (x-api-key)</label>
                     <input 
                       type="password" 
-                      value={settings.doubaoToken}
-                      onChange={(e) => setSettings({...settings, doubaoToken: e.target.value})}
-                      placeholder="Volcengine Access Token"
-                      className="w-full text-sm p-2 border border-pink-200 rounded focus:ring-2 focus:ring-pink-500 outline-none font-mono"
+                      value={settings.doubaoKey}
+                      onChange={(e) => setSettings({...settings, doubaoKey: e.target.value})}
+                      placeholder="e.g. fdb3b0e2-..."
+                      className="w-full text-sm p-2 border border-emerald-200 rounded focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
                     />
                  </div>
-                 <p className="col-span-2 text-[10px] text-slate-400 leading-normal">
-                    注意：请确保已在火山引擎控制台开通 <b>语音合成</b> 服务，并绑定 BigTTS 试用包。<br/>
-                    本应用使用 V3 协议，需确保 Token 权限正确。
-                 </p>
-              </div>
-            </div>
-          </section>
-
-          {/* Voice Config (Doubao Only) */}
-          {settings.ttsProvider === 'doubao' && (
-            <section className="animate-in fade-in slide-in-from-top-2">
-              <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                 豆包音色参数
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">音色选择</label>
-                    <select 
-                      value={settings.doubaoVoiceId}
-                      onChange={(e) => setSettings({...settings, doubaoVoiceId: e.target.value})}
-                      className="w-full text-sm p-2 border border-slate-300 rounded focus:ring-2 focus:ring-pink-500 outline-none"
+                    <label className="block text-xs font-semibold text-emerald-600 mb-1">Doubao Voice Model</label>
+                    <select
+                      value={settings.doubaoVoice}
+                      onChange={(e) => setSettings({...settings, doubaoVoice: e.target.value})}
+                      className="w-full text-sm p-2 border border-emerald-200 rounded focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
                     >
                       {DOUBAO_VOICES.map(v => (
                         <option key={v.id} value={v.id}>{v.name}</option>
                       ))}
                     </select>
                  </div>
-                 <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">语速 (0.8 - 1.5)</label>
-                    <input 
-                      type="range"
-                      min="0.8"
-                      max="1.5"
-                      step="0.1"
-                      value={settings.doubaoSpeed}
-                      onChange={(e) => setSettings({...settings, doubaoSpeed: parseFloat(e.target.value)})}
-                      className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-pink-500 mt-2"
-                    />
-                    <div className="text-xs text-right text-slate-400">{settings.doubaoSpeed}x</div>
-                 </div>
               </div>
-            </section>
-          )}
+
+            </div>
+          </section>
 
         </div>
 
