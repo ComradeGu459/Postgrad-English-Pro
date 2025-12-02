@@ -133,7 +133,7 @@ export default function App() {
     console.error("Audio Playback Error", e);
     setIsPlaying(false);
     setLoadingAudioIndex(null);
-    alert("播放出错，请检查网络或 TTS 设置");
+    alert("播放出错，请检查网络或 TTS 设置。如果使用的是豆包，请确认 AppID/Token 正确且已开通服务。");
   };
 
   const scheduleNext = (completedIndex: number) => {
@@ -300,7 +300,7 @@ export default function App() {
         a.click();
         document.body.removeChild(a);
     } catch (e: any) {
-        alert("全文生成失败，可能受限于API速率限制: " + e.message);
+        alert("全文生成失败 (可能是API限制或网络问题): " + e.message);
     } finally {
         setIsDownloadingFull(false);
     }

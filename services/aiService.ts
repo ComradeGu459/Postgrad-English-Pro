@@ -142,55 +142,109 @@ export const analyzeTerm = async (term: string): Promise<string> => {
   }
 };
 
-// --- TTS Services (Returning raw base64 or buffer) ---
+// --- TTS Services ---
 
-const callDoubaoTTS = async (text: string, settings: any): Promise<Uint8Array> => {
-  if (!settings.doubaoAppId || !settings.doubaoToken) {
-    throw new Error("请在设置中配置豆包 AppID 和 Token");
-  }
+// Doubao/Volcengine TTS using WebSocket (Bypasses CORS)
+const callDoubaoTTS = (text: string, settings: any): Promise<Uint8Array> => {
+  return new Promise((resolve, reject) => {
+    if (!settings.doubaoAppId || !settings.doubaoToken) {
+      return reject(new Error("请在设置中配置豆包 AppID 和 Token"));
+    }
 
-  const reqId = crypto.randomUUID();
-  const response = await fetch('https://openspeech.bytedance.com/api/v1/tts', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer;${settings.doubaoToken}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      app: {
-        appid: settings.doubaoAppId,
-        token: settings.doubaoToken,
-        cluster: 'volcano_tts'
-      },
-      user: {
-        uid: 'web_user_001'
-      },
-      audio: {
-        voice_type: settings.doubaoVoiceId,
-        encoding: 'pcm',
-        speed_ratio: settings.doubaoSpeed || 1.0,
-        rate: 24000
-      },
-      request: {
-        reqid: reqId,
-        text: text,
-        operation: 'query'
+    const socket = new WebSocket('wss://openspeech.bytedance.com/api/v1/tts/ws_binary');
+    const audioChunks: Uint8Array[] = [];
+
+    socket.binaryType = 'arraybuffer';
+
+    socket.onopen = () => {
+      const reqId = crypto.randomUUID();
+      const payload = JSON.stringify({
+        app: {
+          appid: settings.doubaoAppId,
+          token: settings.doubaoToken,
+          cluster: 'volcano_tts'
+        },
+        user: { uid: 'web_user' },
+        audio: {
+          voice_type: settings.doubaoVoiceId,
+          encoding: 'pcm',
+          speed_ratio: settings.doubaoSpeed || 1.0,
+          rate: 24000
+        },
+        request: {
+          reqid: reqId,
+          text: text,
+          operation: 'submit' // Important: submit for streaming
+        }
+      });
+
+      // Construct Header (4 bytes)
+      // Byte 0: Version (4 bits) | Header Size (4 bits) -> 0x1 | 0x1 = 0x11
+      // Byte 1: Msg Type (4 bits) | Flags (4 bits) -> 0x1 (Full Client Req) | 0x0 = 0x10
+      // Byte 2: Serialization (4 bits) | Compression (4 bits) -> 0x1 (JSON) | 0x0 (None) = 0x10
+      // Byte 3: Reserved = 0x00
+      const header = new Uint8Array([0x11, 0x10, 0x10, 0x00]);
+
+      // Encode Payload
+      const encoder = new TextEncoder();
+      const payloadBytes = encoder.encode(payload);
+
+      // Combine
+      const message = new Uint8Array(header.length + payloadBytes.length);
+      message.set(header, 0);
+      message.set(payloadBytes, header.length);
+
+      socket.send(message);
+    };
+
+    socket.onmessage = (event) => {
+      const buffer = event.data as ArrayBuffer;
+      const view = new DataView(buffer);
+      // Byte 0: Version/HeaderSize
+      const headerSize = (view.getUint8(0) & 0x0F) * 4; 
+      // Byte 1: MsgType/Flags
+      const msgType = (view.getUint8(1) >> 4); 
+      const flags = (view.getUint8(1) & 0x0F); 
+      
+      // MsgType 0xB (11) is Audio-only server response
+      if (msgType === 0xB) { 
+        // Payload is raw audio (PCM)
+        const audioData = new Uint8Array(buffer.slice(headerSize));
+        if (audioData.length > 0) {
+           audioChunks.push(audioData);
+        }
+
+        // Flags: 0=no seq, 1=seq>0, 2=neg seq (last), 3=neg seq (last)
+        if (flags >= 2) { 
+           socket.close();
+           resolve(mergeBuffers(audioChunks));
+        }
+      } else if (msgType === 0xF) { // Error message
+        const decoder = new TextDecoder();
+        const errorMsg = decoder.decode(buffer.slice(headerSize));
+        console.error("Doubao WS Error Payload:", errorMsg);
+        socket.close();
+        reject(new Error(`Doubao Error: ${errorMsg}`));
       }
-    })
+    };
+
+    socket.onerror = (e) => {
+      console.error("WebSocket Error", e);
+      reject(new Error("WebSocket connection failed. Check console for details."));
+    };
+    
+    // Safety timeout (30s)
+    setTimeout(() => {
+        if (socket.readyState !== WebSocket.CLOSED) {
+            socket.close();
+            if (audioChunks.length > 0) {
+                 resolve(mergeBuffers(audioChunks)); // Resolve with what we have
+            } else {
+                 reject(new Error("TTS Timeout"));
+            }
+        }
+    }, 30000); 
   });
-
-  if (!response.ok) {
-     const errText = await response.text();
-     throw new Error(`Doubao API Error: ${response.status} ${errText}`);
-  }
-
-  const data = await response.json();
-  if (data.code !== 3000) {
-      throw new Error(`Doubao TTS Failed: ${data.message} (Code ${data.code})`);
-  }
-
-  if (!data.data) throw new Error("No audio data returned from Doubao");
-  return decodeBase64(data.data);
 };
 
 const callGeminiTTS = async (text: string, apiKey: string): Promise<Uint8Array> => {
@@ -241,13 +295,10 @@ export const generateFullTextAudio = async (texts: string[]): Promise<string> =>
   try {
     const buffers: Uint8Array[] = [];
     // Process sequentially to avoid rate limits and ensure order
-    // In production, you might want to parallelize with a concurrency limit
     for (const text of texts) {
-      // Small pause (silence) between sentences could be added here if needed by pushing a silence buffer
       const buffer = await fetchRawAudio(text);
       buffers.push(buffer);
-      // Optional: Add 500ms silence between sentences
-      // buffers.push(new Uint8Array(24000 * 0.5 * 2)); // 2 bytes per sample (16-bit)
+      // Optional: Add small silence?
     }
     
     const merged = mergeBuffers(buffers);
