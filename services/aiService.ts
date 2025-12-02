@@ -151,7 +151,13 @@ const callDoubaoTTS = (text: string, settings: any): Promise<Uint8Array> => {
       return reject(new Error("请在设置中配置豆包 AppID 和 Token"));
     }
 
-    const socket = new WebSocket('wss://openspeech.bytedance.com/api/v1/tts/ws_binary');
+    // Browsers cannot set custom headers for WebSocket handshake.
+    // We attempt to pass the Authorization via query parameter as a fallback.
+    // Format: ?Authorization=Bearer;TOKEN
+    const authValue = `Bearer;${settings.doubaoToken}`;
+    const wsUrl = `wss://openspeech.bytedance.com/api/v1/tts/ws_binary?Authorization=${encodeURIComponent(authValue)}`;
+    
+    const socket = new WebSocket(wsUrl);
     const audioChunks: Uint8Array[] = [];
 
     socket.binaryType = 'arraybuffer';
@@ -161,7 +167,7 @@ const callDoubaoTTS = (text: string, settings: any): Promise<Uint8Array> => {
       const payload = JSON.stringify({
         app: {
           appid: settings.doubaoAppId,
-          token: settings.doubaoToken,
+          token: settings.doubaoToken, // "fake" token in payload, real auth in handshake
           cluster: 'volcano_tts'
         },
         user: { uid: 'web_user' },
@@ -230,9 +236,17 @@ const callDoubaoTTS = (text: string, settings: any): Promise<Uint8Array> => {
 
     socket.onerror = (e) => {
       console.error("WebSocket Error", e);
-      reject(new Error("WebSocket connection failed. Check console for details."));
+      // Since onerror gives no details in browser, we provide a generic hint about Auth
+      reject(new Error("WebSocket handshake failed. Please check your AppID and Token."));
     };
     
+    socket.onclose = (e) => {
+        if (!e.wasClean && audioChunks.length === 0) {
+             // If closed without being clean and no data received, it's likely an auth error
+             reject(new Error("Connection closed unexpectedly."));
+        }
+    };
+
     // Safety timeout (30s)
     setTimeout(() => {
         if (socket.readyState !== WebSocket.CLOSED) {
