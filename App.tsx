@@ -366,6 +366,29 @@ export default function App() {
       }
   };
 
+  // --- History Management Handlers ---
+  const handleDeleteHistory = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    if (window.confirm("确定要删除这条历史记录吗？")) {
+        const updated = history.filter(h => h.id !== id);
+        setHistory(updated);
+        localStorage.setItem('shadowing_history_v3', JSON.stringify(updated));
+    }
+  };
+
+  const handleExportHistory = () => {
+    const jsonString = JSON.stringify(history, null, 2);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `postgrad_history_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-indigo-100 flex flex-col" onClick={() => setSelectionTerm(null)}>
       
@@ -414,13 +437,29 @@ export default function App() {
             <div className="relative bg-white w-80 shadow-2xl p-4 flex flex-col h-full animate-in slide-in-from-left duration-200">
                 <div className="flex justify-between items-center mb-4 border-b pb-2">
                     <h2 className="font-bold text-lg flex items-center gap-2 text-slate-800"><History className="w-5 h-5"/> 历史记录</h2>
-                    <button onClick={() => setShowHistory(false)}><X className="w-5 h-5 text-slate-400"/></button>
+                    <div className="flex items-center gap-1">
+                        <button onClick={handleExportHistory} title="导出全部" className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded transition-colors">
+                            <Download className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => setShowHistory(false)} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
                 </div>
                 <div className="flex-1 overflow-y-auto space-y-2">
                     {history.map(item => (
-                        <div key={item.id} onClick={() => { setText(item.text); setTitle(item.title); setShowHistory(false); }} className="p-3 bg-slate-50 hover:bg-indigo-50 rounded-lg cursor-pointer border border-slate-100 transition-colors group">
-                            <h3 className="font-semibold text-slate-700 text-sm truncate group-hover:text-indigo-700">{item.title}</h3>
-                            <p className="text-xs text-slate-400 mt-1">{item.date} · {item.text.length} chars</p>
+                        <div key={item.id} onClick={() => { setText(item.text); setTitle(item.title); setShowHistory(false); }} className="flex items-center p-3 bg-slate-50 hover:bg-indigo-50 rounded-lg cursor-pointer border border-slate-100 transition-colors group">
+                            <div className="flex-1 overflow-hidden">
+                                <h3 className="font-semibold text-slate-700 text-sm truncate group-hover:text-indigo-700">{item.title}</h3>
+                                <p className="text-xs text-slate-400 mt-1">{item.date} · {item.text.length} chars</p>
+                            </div>
+                            <button 
+                                onClick={(e) => handleDeleteHistory(e, item.id)}
+                                className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-all ml-2"
+                                title="删除此条记录"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
                         </div>
                     ))}
                     {history.length === 0 && <p className="text-center text-slate-400 mt-10 text-sm">暂无历史记录</p>}
