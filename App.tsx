@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Pause, RotateCcw, Volume2, BookOpen, Eye, EyeOff, 
   ChevronRight, Save, History, Trash2, X, Search, Volume1, FileText, 
-  Sparkles, Settings, Globe, Mic, Download, Wand2, Loader2, Edit3, Headphones
+  Sparkles, Settings, Globe, Mic, Download, Wand2, Loader2, Edit3, Headphones, Upload
 } from 'lucide-react';
 import { SentencePair, HistoryItem, AppSettings } from './types';
 import { translateText, analyzeGrammar, generateSpeechUrl, generateFullTextAudio, splitSentences } from './services/aiService';
@@ -59,6 +59,7 @@ export default function App() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const speakTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeCardRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Cache for generated audio URLs to prevent re-fetching in loops
   const audioCache = useRef<Map<string, string>>(new Map());
@@ -389,6 +390,50 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleImportHistory = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const imported = JSON.parse(content);
+        
+        if (!Array.isArray(imported)) throw new Error("文件格式无效");
+        
+        // Merge strategy: Create a Map by ID to avoid duplicates (Import overwrites existing if same ID)
+        // Or simpler: Prepend imported items and let user manage duplicates, 
+        // but filtering by unique ID is safer.
+        const mergedMap = new Map();
+        
+        // Add existing items first
+        history.forEach(h => mergedMap.set(h.id, h));
+        
+        let addedCount = 0;
+        // Add/Overwrite with imported items
+        imported.forEach((h: any) => {
+            if (h.id && h.title && h.text) {
+                mergedMap.set(h.id, h);
+                addedCount++;
+            }
+        });
+        
+        const mergedArray = Array.from(mergedMap.values()).sort((a, b) => b.id - a.id);
+        
+        setHistory(mergedArray);
+        localStorage.setItem('shadowing_history_v3', JSON.stringify(mergedArray));
+        alert(`成功导入/合并 ${addedCount} 条记录`);
+      } catch (err) {
+        alert("导入失败: 文件格式不正确");
+        console.error(err);
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-indigo-100 flex flex-col" onClick={() => setSelectionTerm(null)}>
       
@@ -438,6 +483,16 @@ export default function App() {
                 <div className="flex justify-between items-center mb-4 border-b pb-2">
                     <h2 className="font-bold text-lg flex items-center gap-2 text-slate-800"><History className="w-5 h-5"/> 历史记录</h2>
                     <div className="flex items-center gap-1">
+                        <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            onChange={handleImportHistory} 
+                            className="hidden" 
+                            accept=".json" 
+                        />
+                        <button onClick={() => fileInputRef.current?.click()} title="导入备份" className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded transition-colors">
+                            <Upload className="w-4 h-4" />
+                        </button>
                         <button onClick={handleExportHistory} title="导出全部" className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded transition-colors">
                             <Download className="w-4 h-4" />
                         </button>
